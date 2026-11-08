@@ -40,8 +40,16 @@ import { BotTrader } from "./copyTradingTypes.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { WalletModal } from "./WalletModal.tsx";
 import { TradeHistoryPage } from "./TradeHistoryPage.tsx";
-import { WalletState, loadStoredWallet, saveStoredWallet, creditWalletBalance } from "./walletState.ts";
-import { GlobalTradeRecord, loadGlobalTradeHistory, saveGlobalTradeHistory } from "./tradeHistoryState.ts";
+import { WalletState, loadStoredWallet, saveStoredWallet } from "./walletState.ts";
+import { GlobalTradeRecord, loadGlobalTradeHistory } from "./tradeHistoryState.ts";
+import { TRADENEWS_API_BASE } from "./tradenews/config.ts";
+import { getKlines, getTickers } from "./tradenews/api.ts";
+import { getPositionHistory, getTradeHistory } from "./tradenews/apiExtended.ts";
+import { BackendBanner } from "./tradenews/BackendBanner.tsx";
+import { AuthModal } from "./tradenews/AuthModal.tsx";
+import { DemoTradingPanel } from "./tradenews/DemoTradingPanel.tsx";
+import { ReferralPanel } from "./tradenews/ReferralPanel.tsx";
+import { useAuth } from "./tradenews/AuthContext.tsx";
 
 interface CryptoTicker {
   symbol: string;
@@ -55,9 +63,8 @@ interface CryptoTicker {
   volume24h: number;
 }
 
-const API_BASE =
-  (window as any).__API_BASE__ ||
-  `${window.location.origin.replace(/\/$/, "")}/api`;
+const API_BASE: string = TRADENEWS_API_BASE;
+void API_BASE;
 
 const TIMEFRAMES = ["30s", "1m", "5m", "15m", "1h", "4h", "1d"];
 
@@ -72,7 +79,8 @@ export default function App() {
   // Selected Coin - default to BTC/USDT
   const [symbol, setSymbol] = useState("BTC/USDT");
   const [tickers, setTickers] = useState<CryptoTicker[]>([]);
-  const [currentPrice, setCurrentPrice] = useState<number>(83450);
+  // No fabricated starting price: 0 means "waiting for backend quote".
+  const [currentPrice, setCurrentPrice] = useState<number>(0);
 
   // Timeframe and Klines (15m is recommended for TATS PRO v1.0)
   const [chartInterval, setChartInterval] = useState("15m");
@@ -96,8 +104,8 @@ export default function App() {
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
   const [walletModalMode, setWalletModalMode] = useState<"CONNECT" | "DEPOSIT" | "WITHDRAW">("CONNECT");
 
-  // Global Trade History & Active Bots Tracking
-  const [tradeHistory, setTradeHistory] = useState<GlobalTradeRecord[]>(() => loadGlobalTradeHistory());
+  // Local trade journal (legacy display only) + backend history handled separately.
+  const [tradeHistory] = useState<GlobalTradeRecord[]>(() => loadGlobalTradeHistory());
   const [activeBotsCount, setActiveBotsCount] = useState<number>(0);
   const [activeBot, setActiveBot] = useState<BotTrader | null>(() => {
     const bots = loadStoredBots();
@@ -115,7 +123,6 @@ export default function App() {
       const bots = loadStoredBots();
       const running = bots.filter((b) => b.status === "RUNNING").length;
       setActiveBotsCount(running);
-      setTradeHistory(loadGlobalTradeHistory());
       setWallet(loadStoredWallet());
 
       const lastId = getLastActiveBotId();
@@ -139,14 +146,12 @@ export default function App() {
     const target = bots.find((b) => b.id === botId);
     if (!target) return;
 
+    // FINANCIAL SAFETY: simulated bots must never credit/debit any wallet.
+    // Bot start/stop only flips local display state; no funds move.
     const isRunning = target.status === "RUNNING";
     const updatedBots = bots.map((b) => {
       if (b.id !== botId) return b;
       if (isRunning) {
-        const marginToRelease = b.openPositions.reduce((sum, p) => sum + p.sizeUsdt, 0);
-        if (marginToRelease > 0) {
-          creditWalletBalance(marginToRelease);
-        }
         return { ...b, status: "IDLE" as const, openPositions: [] };
       } else {
         return { ...b, status: "RUNNING" as const, startedAt: b.startedAt || Date.now() };
@@ -157,9 +162,8 @@ export default function App() {
     setLastActiveBotId(botId);
     const updatedActive = updatedBots.find((b) => b.id === botId) || null;
     setActiveBot(updatedActive);
-    setWallet(loadStoredWallet());
 
-    notify(isRunning ? `Bot "${target.name}" stopped. Open margins released.` : `Bot "${target.name}" started.`);
+    notify(isRunning ? `Bot "${target.name}" stopped (display only).` : `Bot "${target.name}" started (display only).`);
   };
 
   // Price Alerts
@@ -171,6 +175,7 @@ export default function App() {
   } | null>(null);
 
   // Profit Secured & Credited Real-Time Notification
+  // Legacy simulated profit toast state (kept for type stability; no longer fed).
   const [profitNotification, setProfitNotification] = useState<{
     botName: string;
     symbol: string;
@@ -181,30 +186,23 @@ export default function App() {
     exitReason: string;
     newBalance: number;
   } | null>(null);
+  void setProfitNotification;
 
-  // Real-time listener for profit secured & wallet balance events
+  // Simulated profit events are disabled: no listener fabricates PnL or
+  // wallet updates. Only explicit backend/wallet sync events are honored.
+  // (Legacy "tradenews_profit_secured" fabrication path removed.)
   useEffect(() => {
-    const handleProfitSecured = (e: any) => {
-      if (e.detail) {
-        setProfitNotification(e.detail);
-        if (soundEnabled) playAlertChime();
-        setWallet(loadStoredWallet());
-      }
-    };
-
     const handleWalletUpdated = (e: any) => {
       if (e.detail) {
         setWallet(e.detail);
       }
     };
 
-    window.addEventListener("tradenews_profit_secured", handleProfitSecured);
     window.addEventListener("tradenews_wallet_updated", handleWalletUpdated);
     return () => {
-      window.removeEventListener("tradenews_profit_secured", handleProfitSecured);
       window.removeEventListener("tradenews_wallet_updated", handleWalletUpdated);
     };
-  }, [soundEnabled]);
+  }, []);
 
   // Auto-dismiss profit notification after 6 seconds
   useEffect(() => {
@@ -308,68 +306,59 @@ export default function App() {
         decimals: t.decimals,
       }));
     }
-    return [
-      { symbol: "BTC/USDT", name: "Bitcoin", price: 83450, decimals: 2 },
-      { symbol: "ETH/USDT", name: "Ethereum", price: 3420, decimals: 2 },
-      { symbol: "SOL/USDT", name: "Solana", price: 118.5, decimals: 2 },
-      { symbol: "BNB/USDT", name: "BNB", price: 598.4, decimals: 2 },
-      { symbol: "XRP/USDT", name: "Ripple", price: 0.5824, decimals: 4 },
-      { symbol: "DOGE/USDT", name: "Dogecoin", price: 0.1645, decimals: 4 },
-      { symbol: "ADA/USDT", name: "Cardano", price: 0.492, decimals: 4 },
-      { symbol: "AVAX/USDT", name: "Avalanche", price: 34.6, decimals: 2 },
-      { symbol: "SUI/USDT", name: "Sui", price: 2.15, decimals: 4 },
-      { symbol: "NEAR/USDT", name: "Near", price: 5.42, decimals: 4 },
-      { symbol: "LINK/USDT", name: "Chainlink", price: 12.85, decimals: 2 },
-      { symbol: "PEPE/USDT", name: "Pepe", price: 0.0000095, decimals: 6 },
-      { symbol: "SHIB/USDT", name: "Shiba Inu", price: 0.0000185, decimals: 6 },
-      { symbol: "LTC/USDT", name: "Litecoin", price: 72.4, decimals: 2 },
-      { symbol: "DOT/USDT", name: "Polkadot", price: 4.8, decimals: 4 },
-      { symbol: "TRX/USDT", name: "Tron", price: 0.162, decimals: 4 },
-    ];
+    // No backend data yet: return an empty list. Never fabricate prices —
+    // charts/alerts render an explicit "waiting for backend" state instead.
+    return [] as { symbol: string; name: string; price: number; decimals: number }[];
   }, [tickers]);
 
   const selectedTicker = useMemo(() => {
-    return (
-      tickers.find((t) => t.symbol === symbol) || {
-        symbol,
-        base: symbol.split("/")[0] || "BTC",
-        name: symbol.split("/")[0] === "BTC" ? "Bitcoin" : symbol.split("/")[0],
-        decimals:
-          symbol.includes("PEPE") || symbol.includes("SHIB")
-            ? 6
-            : symbol.includes("XRP") ||
-              symbol.includes("DOGE") ||
-              symbol.includes("ADA") ||
-              symbol.includes("SUI") ||
-              symbol.includes("NEAR") ||
-              symbol.includes("DOT") ||
-              symbol.includes("TRX")
-            ? 4
-            : 2,
-        price: currentPrice,
-        priceChangePercent: 1.45,
-        high24h: currentPrice * 1.025,
-        low24h: currentPrice * 0.975,
-        volume24h: 4500000,
-      }
-    );
-  }, [tickers, symbol, currentPrice]);
+    const found = tickers.find((t) => t.symbol === symbol);
+    if (found) return found;
+    // No backend quote yet: expose an explicit empty quote, never a
+    // fabricated price. currentPrice 0 = "waiting for backend".
+    return {
+      symbol,
+      base: symbol.split("/")[0] || "",
+      name: symbol.split("/")[0] || "",
+      decimals:
+        symbol.includes("PEPE") || symbol.includes("SHIB")
+          ? 6
+          : symbol.includes("XRP") ||
+            symbol.includes("DOGE") ||
+            symbol.includes("ADA") ||
+            symbol.includes("SUI") ||
+            symbol.includes("NEAR") ||
+            symbol.includes("DOT") ||
+            symbol.includes("TRX")
+          ? 4
+          : 2,
+      price: 0,
+      priceChangePercent: 0,
+      high24h: 0,
+      low24h: 0,
+      volume24h: 0,
+    } as CryptoTicker;
+  }, [tickers, symbol]);
 
   const decimals = selectedTicker.decimals;
 
-  // Fetch live market tickers from backend (USDT pairs)
+  // Fetch live market tickers from the TradeNews Cloudflare backend.
+  // If the endpoint is disabled/missing, keep the last known tickers and
+  // surface the outage via BackendBanner — never fabricate prices.
+  const [backendHistory, setBackendHistory] = useState<GlobalTradeRecord[] | null>(null);
+  const [backendHistoryError, setBackendHistoryError] = useState<string | null>(null);
   const fetchTickers = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/crypto/tickers`);
-      const data = await res.json();
-      if (Array.isArray(data?.data)) {
-        setTickers(data.data);
-        const match = data.data.find((t: CryptoTicker) => t.symbol === symbol);
-        if (match) {
+    const res = await getTickers();
+    if (res.ok && Array.isArray(res.data)) {
+      const list = res.data as unknown as CryptoTicker[];
+      if (list.length > 0) {
+        setTickers(list);
+        const match = list.find((t: CryptoTicker) => t.symbol === symbol);
+        if (match && typeof match.price === "number" && match.price > 0) {
           setCurrentPrice(match.price);
         }
       }
-    } catch {}
+    }
   }, [symbol]);
 
   // Fetch Klines for chart & signal computation
@@ -378,17 +367,15 @@ export default function App() {
       const activeTf = forcedInterval || chartInterval;
       try {
         setIsLoadingKlines(true);
-        const res = await fetch(
-          `${API_BASE}/crypto/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
-            activeTf
-          )}&limit=120`
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.data)) {
-          setKlines(data.data);
-          if (data.data.length > 0) {
-            const last = data.data[data.data.length - 1];
-            setCurrentPrice(last.close);
+        const res = await getKlines(symbol, activeTf, 120);
+        if (res.ok && Array.isArray(res.data)) {
+          const rows = res.data as unknown as KlineData[];
+          if (rows.length > 0) {
+            setKlines(rows);
+            const last = rows[rows.length - 1];
+            if (typeof last.close === "number" && last.close > 0) {
+              setCurrentPrice(last.close);
+            }
           }
         }
       } catch {
@@ -399,11 +386,50 @@ export default function App() {
     [symbol, chartInterval]
   );
 
+  // Backend trade/position history (real responses only; unavailable state otherwise)
+  const fetchBackendHistory = useCallback(async () => {
+    const [posRes, tradeRes] = await Promise.all([getPositionHistory(), getTradeHistory()]);
+    const merged: GlobalTradeRecord[] = [];
+    let err: string | null = null;
+    for (const r of [posRes, tradeRes]) {
+      if (r.ok && Array.isArray(r.data)) {
+        for (const t of r.data as any[]) {
+          merged.push({
+            id: String(t.id ?? `${t.symbol}-${t.timestamp}`),
+            timestamp: typeof t.timestamp === "number" ? t.timestamp : Date.parse(t.timestamp || t.createdAt || "") || Date.now(),
+            source: String(t.source || "TradeNews backend"),
+            symbol: String(t.symbol || ""),
+            side: t.side === "SHORT" ? "SHORT" : "LONG",
+            entryPrice: Number(t.entryPrice ?? 0),
+            exitPrice: Number(t.exitPrice ?? 0),
+            sizeUsdt: Number(t.sizeUsdt ?? 0),
+            leverage: Number(t.leverage ?? 1),
+            pnlUsdt: Number(t.pnlUsdt ?? 0),
+            pnlPct: Number(t.pnlPct ?? 0),
+            exitReason: String(t.exitReason || t.status || ""),
+            status: "CLOSED",
+          });
+        }
+      } else if ((r as any).endpointDisabled || (r as any).status === 0) {
+        err = (r as any).message || "History endpoint unavailable.";
+      }
+    }
+    setBackendHistoryError(err);
+    setBackendHistory(merged);
+  }, []);
+
   // Initial load
+  const { token: authToken, user: authUser, signOut } = useAuth();
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<"LOGIN" | "REGISTER">("LOGIN");
   useEffect(() => {
     fetchTickers();
     fetchKlines();
   }, [fetchTickers, fetchKlines]);
+
+  useEffect(() => {
+    void fetchBackendHistory();
+  }, [fetchBackendHistory]);
 
   // Polling loop every 2 seconds
   useEffect(() => {
@@ -413,7 +439,13 @@ export default function App() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [fetchTickers, fetchKlines]);
-
+  useEffect(() => {
+    if (!authToken) return;
+    const timer = window.setInterval(() => {
+      void fetchBackendHistory();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [authToken, fetchBackendHistory]);
   // Drag-to-scroll handlers for horizontal currency carousel
   const handleCarouselMouseDown = (e: React.MouseEvent) => {
     if (!carouselRef.current) return;
@@ -481,14 +513,31 @@ export default function App() {
 
       {/* 2. MAIN VIEWPORT */}
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden bg-[#040706]">
+        <BackendBanner onNotify={notify} />
+        {/* TradeNews account strip */}
+        <div className="px-3 py-1.5 border-b border-[#122018] bg-[#060a08] flex items-center gap-2 text-xs">
+          {authToken && authUser ? (
+            <>
+              <span className="text-slate-400">Signed in as</span>
+              <span className="text-white font-bold truncate">{authUser.email || authUser.username || `user ${authUser.id}`}</span>
+              <button onClick={() => { signOut(); notify("Signed out."); }} className="ml-auto px-2 py-1 rounded bg-[#131c14] hover:bg-[#1c2b1f] text-slate-300 cursor-pointer">Sign Out</button>
+            </>
+          ) : (
+            <>
+              <span className="text-slate-400">TradeNews account: not signed in. Backend features require sign-in.</span>
+              <button onClick={() => { setAuthModalMode("LOGIN"); setIsAuthModalOpen(true); }} className="ml-auto px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer">Sign In</button>
+              <button onClick={() => { setAuthModalMode("REGISTER"); setIsAuthModalOpen(true); }} className="px-2 py-1 rounded bg-[#131c14] hover:bg-[#1c2b1f] text-slate-200 cursor-pointer">Register</button>
+            </>
+          )}
+        </div>
         {/* VIEW ROUTING (Header removed per user request; all navigation in left sidebar) */}
         {activePage === "HISTORY" ? (
           <TradeHistoryPage
-            tradeHistory={tradeHistory}
+            tradeHistory={backendHistory ?? tradeHistory}
+            backendUnavailable={backendHistory === null ? null : backendHistoryError}
+            signedIn={Boolean(authToken)}
             onClearHistory={() => {
-              saveGlobalTradeHistory([]);
-              setTradeHistory([]);
-              notify("Trade history ledger cleared.");
+              notify("Backend history cannot be cleared from this interface.");
             }}
             onSelectCoinForChart={(sym) => {
               setSymbol(sym);
@@ -669,8 +718,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* 3. MAIN CONTENT: 100% MAXIMUM VIEWPORT CANDLESTICK CHART */}
-            <div className="flex-1 flex flex-col overflow-hidden relative">
+            {/* 3. MAIN CONTENT: CANDLESTICK CHART + BACKEND DEMO TRADING */}
+            <div className="flex-1 flex flex-col xl:flex-row overflow-hidden relative">
               <main className="flex-1 relative overflow-hidden bg-[#040706] min-w-0">
                 <CandleChart
                   klines={klines}
@@ -686,6 +735,23 @@ export default function App() {
                   onToggleSignals={() => setShowSignals(!showSignals)}
                 />
               </main>
+              <aside className="xl:w-[320px] shrink-0 border-t xl:border-t-0 xl:border-l border-[#122018] bg-[#040706] p-3 overflow-y-auto">
+                <DemoTradingPanel
+                  symbol={symbol}
+                  currentPrice={currentPrice}
+                  decimals={decimals}
+                  onNotify={notify}
+                  onRequireAuth={() => {
+                    setAuthModalMode("LOGIN");
+                    setIsAuthModalOpen(true);
+                  }}
+                />
+                <div className="mt-2 text-[11px] text-slate-500 leading-relaxed px-1">
+                  Demo trading is isolated from any real-money balance. Live deposits,
+                  withdrawals, and live trading remain disabled in this build.
+                </div>
+                <ReferralPanel onNotify={notify} />
+              </aside>
             </div>
           </>
         )}
@@ -813,7 +879,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Wallet Modal (Connect Wallet, Deposit with QR code, Withdraw) */}
+      {/* Wallet Modal (records only — real-money flows disabled) */}
       <WalletModal
         isOpen={isWalletModalOpen}
         onClose={() => setIsWalletModalOpen(false)}
@@ -823,6 +889,13 @@ export default function App() {
           setWallet(updated);
           saveStoredWallet(updated);
         }}
+        onNotify={notify}
+      />
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        initialMode={authModalMode}
         onNotify={notify}
       />
 

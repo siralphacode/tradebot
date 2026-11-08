@@ -61,14 +61,34 @@ const WALLET_STORAGE_KEY = "tradenews_user_wallet_v1";
 export function loadStoredWallet(): WalletState {
   try {
     const raw = localStorage.getItem(WALLET_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Never auto-fabricate a balance. Older builds seeded a fake
+      // connected wallet — migrate those to a disconnected, zero-balance
+      // state so the UI cannot display invented funds.
+      if (parsed && typeof parsed === "object") {
+        const migrated: WalletState = {
+          isConnected: parsed.isConnected === true && Boolean(parsed.address),
+          address: typeof parsed.address === "string" ? parsed.address : null,
+          walletName: parsed.walletName ?? null,
+          network: parsed.network ?? "Arbitrum One",
+          balanceUsdt: 0,
+        };
+        if (!migrated.isConnected) {
+          migrated.address = null;
+          migrated.walletName = null;
+        }
+        return migrated;
+      }
+    }
   } catch {}
+  // Safe default: NOT connected, zero balance (no fabricated funds).
   return {
-    isConnected: true,
-    address: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-    walletName: "MetaMask",
+    isConnected: false,
+    address: null,
+    walletName: null,
     network: "Arbitrum One",
-    balanceUsdt: 18450.0,
+    balanceUsdt: 0,
   };
 }
 

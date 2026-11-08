@@ -20,12 +20,16 @@ interface TradeHistoryPageProps {
   tradeHistory: GlobalTradeRecord[];
   onClearHistory: () => void;
   onSelectCoinForChart: (symbol: string) => void;
+  backendUnavailable?: string | null;
+  signedIn?: boolean;
 }
 
 export function TradeHistoryPage({
   tradeHistory,
   onClearHistory,
   onSelectCoinForChart,
+  backendUnavailable = null,
+  signedIn = false,
 }: TradeHistoryPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterSide, setFilterSide] = useState<"ALL" | "LONG" | "SHORT">("ALL");
@@ -109,8 +113,15 @@ export function TradeHistoryPage({
               </h1>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Synchronized trade executions across user trades and all 20 AI copy trading bots.
+              {signedIn
+                ? "Trade and position history reported by the TradeNews backend. No simulated fills are shown."
+                : "Sign in to load trade history from the TradeNews backend. Nothing here is simulated."}
             </p>
+            {backendUnavailable && (
+              <p className="text-xs text-amber-300 mt-2 bg-amber-950/30 border border-amber-700/40 rounded-lg px-3 py-2">
+                History unavailable: {backendUnavailable}
+              </p>
+            )}
           </div>
 
           {/* Quick Metrics Strip */}

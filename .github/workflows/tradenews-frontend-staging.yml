@@ -1,0 +1,40 @@
+# TradeNews frontend — staging deployment (Cloudflare Pages).
+# Production deploys ONLY through the protected workflow in
+# siralphacode/tradenews (migration/cloudflare-d1-backend) after owner approval.
+# This workflow never touches production D1 or production DNS.
+
+name: tradenews-frontend-staging
+
+on:
+  push:
+    branches:
+      - "integration/tradenews-tradebot-cloudflare"
+  workflow_dispatch:
+
+jobs:
+  validate-and-deploy-staging:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Build (staging)
+        run: npm run build
+        env:
+          VITE_TRADENEWS_API_BASE: ${{ secrets.STAGING_TRADENEWS_API_BASE }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.STAGING_TURNSTILE_SITE_KEY }}
+          VITE_FINANCIAL_OPERATIONS_ENABLED: "false"
+      - name: Deploy to Cloudflare Pages (staging)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=tradenews-frontend-staging --branch=staging

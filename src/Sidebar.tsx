@@ -111,14 +111,14 @@ export function Sidebar({
                   <div className="text-base font-extrabold font-mono text-white tracking-tight">
                     ${wallet.balanceUsdt.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs text-slate-400 font-sans">USDT</span>
                   </div>
-                  {activeBotsCount > 0 && (
-                    <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded border border-emerald-800/40 animate-pulse">
-                      LIVE
-                    </span>
-                  )}
+                </div>
+                <div className="text-[11px] text-slate-500 leading-snug">
+                  {wallet.address
+                    ? "Backend-verified balance. Deposits/withdrawals are disabled in this build."
+                    : "No verified wallet linked. Balances appear only after backend verification."}
                 </div>
 
-                {/* Deposit & Withdraw Quick Actions */}
+                {/* Wallet record actions (no real-money flows) */}
                 <div className="grid grid-cols-2 gap-1.5 pt-1">
                   <button
                     onClick={() => onOpenWalletModal("DEPOSIT")}
@@ -198,7 +198,7 @@ export function Sidebar({
           >
             <div className="flex items-center gap-3">
               <Bot size={18} className={activePage === "COPY_TRADING" ? "text-emerald-400" : "text-slate-400"} />
-              {!isCollapsed && <span className="truncate">AI Copy Trading</span>}
+              {!isCollapsed && <span className="truncate">Strategies</span>}
             </div>
             {!isCollapsed && (
               <span
@@ -262,7 +262,7 @@ export function Sidebar({
               </span>
             </div>
 
-            {/* Live PnL Card */}
+            {/* Live PnL Card (reference only — no live funds move here) */}
             <div className="p-2 rounded-lg bg-[#030604] border border-[#112017]">
               <div className="flex items-center justify-between text-[10px] text-slate-400">
                 <span className="font-semibold">LIVE BOT PNL</span>

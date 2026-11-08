@@ -1,0 +1,20 @@
+/**
+ * TradeNews on Cloudflare — static frontend + Worker API proxy.
+ *
+ * Routes (do NOT modify production DNS/D1 here):
+ *   https://tradenews.live        -> Pages / Workers Static Assets (dist/)
+ *   https://tradenews.live/api/*   -> proxied to https://api.tradenews.live/*
+ *   https://api.tradenews.live     -> existing Cloudflare Workers + D1 backend
+ *
+ * Production deploy uses the existing protected GitHub Actions workflow in
+ * siralphacode/tradenews (migration/cloudflare-d1-backend). This wrangler
+ * file targets STAGING / preview only and never touches production D1.
+ */
+{
+  "name": "tradenews-frontend-staging",
+  "compatibility_date": "2024-12-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
