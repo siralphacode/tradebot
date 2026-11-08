@@ -111,7 +111,7 @@ export async function tradenewsFetch<T = any>(
 ): Promise<ApiResult<T>> {
   const url = joinPath(TRADENEWS_API_BASE, path);
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), TRADENEWS_API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), TRADENEWS_API_TIMEOUT_MS);
   try {
     const headers: Record<string, string> = { Accept: "application/json" };
     let body: string | undefined;
@@ -143,7 +143,7 @@ export async function tradenewsFetch<T = any>(
     }
     return failure(0, "Network error: cannot reach the TradeNews backend.");
   } finally {
-    window.clearTimeout(timer);
+    clearTimeout(timer);
   }
 }
 

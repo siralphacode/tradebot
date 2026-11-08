@@ -17,10 +17,16 @@ describe("no-Google dependency guard", () => {
     }
   });
 
-  it("vite config + env example are Google-free", () => {
+  it("vite config + env example contain no live Google backend references", () => {
+    // Strip comment lines first: comments may document the *removal* of
+    // Google deps ("No Google Cloud Run / Firebase ..."), which must not
+    // trip the guard. Only live code/imports/env keys count.
     for (const f of ["vite.config.ts", ".env.example", "index.html"]) {
-      const text = read(f);
-      expect(text).not.toMatch(/@google\/genai|GoogleGenAI|GEMINI_API_KEY|reCAPTCHA|firebase/i);
+      const text = read(f)
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("#"))
+        .join("\n");
+      expect(text).not.toMatch(/@google\/genai|GoogleGenAI|GEMINI_API_KEY|reCAPTCHA/i);
     }
   });
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ApiFailure } from "../src/tradenews/apiClient.ts";
 import { authLogin, authRegister, getKlines, getTickers } from "../src/tradenews/api.ts";
 import {
   closeDemoPosition,
@@ -29,10 +30,9 @@ describe("TradeNews Cloudflare API contracts", () => {
     mockFetchOnce(401, { error: "Invalid credentials" });
     const res = await authLogin({ email: "a@b.c", password: "password123" });
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.kind).toBe("unauthorized");
-      expect(res.endpointDisabled).toBe(false);
-    }
+    const fail = res as unknown as ApiFailure;
+    expect(fail.kind).toBe("unauthorized");
+    expect(fail.endpointDisabled).toBe(false);
   });
 
   it("auth/register sends turnstile token + referral code", async () => {
@@ -61,7 +61,7 @@ describe("TradeNews Cloudflare API contracts", () => {
     mockFetchOnce(404, { error: "Not found" });
     const missing = await getTickers();
     expect(missing.ok).toBe(false);
-    if (!missing.ok) expect(missing.endpointDisabled).toBe(true);
+    expect((missing as unknown as ApiFailure).endpointDisabled).toBe(true);
   });
 
   it("market klines passes symbol/interval/limit", async () => {
@@ -76,10 +76,9 @@ describe("TradeNews Cloudflare API contracts", () => {
     mockFetchOnce(500, { error: "boom" });
     const res = await getDemoBalance();
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.kind).toBe("server");
-      expect(res.endpointDisabled).toBe(false);
-    }
+    const fail = res as unknown as ApiFailure;
+    expect(fail.kind).toBe("server");
+    expect(fail.endpointDisabled).toBe(false);
   });
 
   it("demo open/close shape", async () => {
@@ -95,9 +94,25 @@ describe("TradeNews Cloudflare API contracts", () => {
   });
 
   it("tradenewsFetch attaches Bearer token when present", async () => {
-    try {
-      localStorage.setItem("tradenews_auth_token", "secret-token");
-    } catch {}
+    const store: Record<string, string> = { tradenews_auth_token: "secret-token" };
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
+      clear: () => {
+        for (const k of Object.keys(store)) delete store[k];
+      },
+    } as any);
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+      clear: () => {},
+    } as any);
     const fetchMock = mockFetchOnce(200, { data: [] });
     await getTickers();
     const [, init] = fetchMock.mock.calls[0];

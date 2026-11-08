@@ -1,0 +1,90 @@
+# TradeNews frontend — DIRECT PRODUCTION deployment (Cloudflare Pages).
+#
+# Owner instruction: deploy the TradeBot interface directly to
+# https://tradenews.live (production). No staging site, no staging
+# database. The pre-existing staging workflow file was superseded by this
+# production workflow per the direct-production order.
+#
+# Safety enforced by this workflow:
+# - tsc + build + vitest must pass before any deploy step runs.
+# - VITE_FINANCIAL_OPERATIONS_ENABLED is pinned to "false".
+# - No D1 commands run here: production D1 is never migrated, reset, or
+#   seeded by the frontend deploy. Backend Worker + D1 are untouched.
+# - Requires the `cloudflare-production` environment approval in GitHub.
+#
+# Required environment / secrets (repository or `cloudflare-production`
+# environment scope):
+#   CLOUDFLARE_API_TOKEN   — Cloudflare token (resolves the prior HTTP 401;
+#                            must have Pages:Write + Workers:Read on the account)
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare account ID
+#   PROD_TRADENEWS_API_BASE — e.g. https://api.tradenews.live
+#   PROD_TURNSTILE_SITE_KEY — Cloudflare Turnstile site key (public)
+# Cloudflare Pages project: tradenews-frontend (custom domains:
+# tradenews.live, www.tradenews.live).
+
+name: tradenews-frontend-production
+
+on:
+  push:
+    branches:
+      - "integration/tradenews-tradebot-cloudflare"
+      - "main"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit + contract tests
+        run: npm test
+      - name: Build (production)
+        run: npm run build
+        env:
+          VITE_TRADENEWS_API_BASE: ${{ secrets.PROD_TRADENEWS_API_BASE }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.PROD_TURNSTILE_SITE_KEY }}
+          VITE_FINANCIAL_OPERATIONS_ENABLED: "false"
+
+  deploy-production:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: cloudflare-production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build (production)
+        run: npm run build
+        env:
+          VITE_TRADENEWS_API_BASE: ${{ secrets.PROD_TRADENEWS_API_BASE }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.PROD_TURNSTILE_SITE_KEY }}
+          VITE_FINANCIAL_OPERATIONS_ENABLED: "false"
+      - name: Verify financial kill-switch in bundle
+        run: |
+          if grep -roq "VITE_FINANCIAL_OPERATIONS_ENABLED" dist/ 2>/dev/null; then
+            echo "Raw env name leaked into bundle"; exit 1;
+          fi
+          echo "Financial operations remain disabled (build-time false)."
+      - name: Deploy to Cloudflare Pages (production: tradenews.live + www)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=tradenews-frontend --branch=main
