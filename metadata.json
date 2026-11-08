@@ -1,0 +1,8 @@
+{
+  "name": "Crypto Trading Simulator",
+  "description": "A full-stack MEXC trading simulator with real-time price monitoring and virtual balance management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
