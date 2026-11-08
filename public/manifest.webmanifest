@@ -1,0 +1,9 @@
+{
+  "name": "TradeNews",
+  "short_name": "TradeNews",
+  "description": "TradeNews institutional crypto signal scope and demo trading terminal.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040706",
+  "theme_color": "#040706"
+}

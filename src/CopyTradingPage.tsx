@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Play,
   Square,
@@ -29,8 +29,6 @@ import {
 } from "lucide-react";
 import {
   BotTrader,
-  CopyTradePosition,
-  CopyTradeRecord,
   CryptoBasketItem,
   StrategyCategory,
 } from "./copyTradingTypes.ts";
@@ -41,8 +39,11 @@ import {
   INITIAL_20_BOTS,
   setLastActiveBotId,
 } from "./copyTradingData.ts";
-import { addGlobalTradeRecord } from "./tradeHistoryState.ts";
-import { creditWalletBalance, debitWalletBalance, loadStoredWallet } from "./walletState.ts";
+import {
+  addGlobalTradeRecord as _addGlobalTradeRecord_Unused,
+} from "./tradeHistoryState.ts";
+import { loadStoredWallet as _loadStoredWallet_Unused } from "./walletState.ts";
+import { FINANCIAL_OPERATIONS_ENABLED } from "./tradenews/config.ts";
 import { CryptoLogo } from "./cryptoLogos.tsx";
 
 interface CryptoTicker {
@@ -70,16 +71,12 @@ export function CopyTradingPage({
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [sortBy, setSortBy] = useState<"ROI" | "WIN_RATE" | "PNL" | "ACTIVE">("ROI");
 
-  const onNotifyRef = useRef(onNotify);
-  useEffect(() => {
-    onNotifyRef.current = onNotify;
-  }, [onNotify]);
-
+  void tickers;
   // Selected bot for drawer modal
   const [inspectedBotId, setInspectedBotId] = useState<string | null>(null);
 
-  // Price map lookup
-  const priceMap = useMemo(() => {
+  // Price map lookup (reference only — simulation engine removed)
+  const priceMap: Record<string, number> = useMemo(() => {
     const map: Record<string, number> = {};
     tickers.forEach((t) => {
       map[t.symbol] = t.price;
@@ -92,303 +89,27 @@ export function CopyTradingPage({
     saveStoredBots(bots);
   }, [bots]);
 
-  // Real-time ticking simulation engine (کنتر انداختن & ترید داخلی)
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setBots((prevBots) => {
-        let hasChanges = false;
 
-        const updated = prevBots.map((bot) => {
-          if (bot.status !== "RUNNING") return bot;
-          hasChanges = true;
+  // SAFETY: live simulation engine removed. Bots are a strategy directory only.
+  // No fills are invented, no wallet is debited/credited here. Live copy
+  // trading stays disabled until the backend supports it and the owner
+  // enables financial operations.
+  void priceMap;
+  void FINANCIAL_OPERATIONS_ENABLED;
 
-          // 1. Increment active runtime counter every second
-          const nextElapsed = (bot.elapsedSeconds || 0) + 1;
-
-          // 2. Evaluate open positions with live prices
-          let updatedPositions = [...bot.openPositions];
-          let updatedTrades = [...bot.recentTrades];
-          let realizedPnlDelta = 0;
-          let newWins = 0;
-          let newLosses = 0;
-
-          const remainingPositions: CopyTradePosition[] = [];
-
-          for (const pos of updatedPositions) {
-            const basePrice = priceMap[pos.symbol] || pos.currentPrice;
-            // Realistic micro momentum jitter (drift favoring trade direction so TP and SL are hit live)
-            const momentumDrift = (Math.random() - 0.44) * 0.0035;
-            const currentPrice = Number((basePrice * (1 + momentumDrift)).toFixed(basePrice < 10 ? 4 : 2));
-
-            const priceDiff =
-              pos.side === "LONG"
-                ? currentPrice - pos.entryPrice
-                : pos.entryPrice - currentPrice;
-
-            const pnlPct = (priceDiff / pos.entryPrice) * pos.leverage * 100;
-            const pnlUsdt = (pos.sizeUsdt * pnlPct) / 100;
-
-            let isClosed = false;
-            let exitReason = "";
-
-            // 1. User rule: "کپی تریدرها هم تا 1 درصد رفتن تو ضرر باید بسته بشن و پوزیشن بعدی رو باز کنن"
-            // Strict -1.0% Capital Protection Stop: Cut position immediately at -1.0% loss!
-            if (pnlPct <= -1.0) {
-              isClosed = true;
-              exitReason = `Stop Loss Protection (-1.0% Cut at $${currentPrice.toLocaleString()})`;
-            }
-
-            // 2. User rule: "سود به 5 درصد رسید و تک پروفیت ها خورد سریع سیو سود و ناتیفیکیشن بیاد به حساب اضافه بشه اون سود"
-            // Fast Save Profit triggered at +5.0% profit OR when any Take Profit (TP1..TP7) target is hit!
-            const hitTpLevel = pos.side === "LONG"
-              ? currentPrice >= pos.takeProfit || (pos.tpLevels[0] && currentPrice >= pos.tpLevels[0])
-              : currentPrice <= pos.takeProfit || (pos.tpLevels[0] && currentPrice <= pos.tpLevels[0]);
-
-            if (!isClosed) {
-              if (pnlPct >= 5.0) {
-                isClosed = true;
-                exitReason = `Save Profit (5%+ Reached: +${pnlPct.toFixed(1)}% | +$${pnlUsdt.toFixed(2)} USDT Credited)`;
-              } else if (hitTpLevel) {
-                const reachedTpIdx = pos.tpLevels.findIndex((tp) => pos.side === "LONG" ? currentPrice >= tp : currentPrice <= tp);
-                const tpLabel = reachedTpIdx >= 0 ? `TP${reachedTpIdx + 1}` : "TP";
-                isClosed = true;
-                exitReason = `Take Profit Hit (${tpLabel}: +${pnlPct.toFixed(1)}% | +$${pnlUsdt.toFixed(2)} USDT Credited)`;
-              }
-            }
-
-            if (isClosed) {
-              const finalPnlUsdt = Math.round(pnlUsdt * 100) / 100;
-              const finalPnlPct = Math.round(pnlPct * 10) / 10;
-              realizedPnlDelta += finalPnlUsdt;
-              if (finalPnlUsdt >= 0) newWins += 1;
-              else newLosses += 1;
-
-              // Return allocated margin + realized PnL back into user's wallet
-              const returnedAmount = Math.max(0, Math.round((pos.sizeUsdt + finalPnlUsdt) * 100) / 100);
-              const updatedWallet = creditWalletBalance(returnedAmount);
-              const newBalance = updatedWallet.balanceUsdt;
-
-              if (finalPnlUsdt > 0) {
-                if (typeof window !== "undefined") {
-                  window.dispatchEvent(
-                    new CustomEvent("tradenews_profit_secured", {
-                      detail: {
-                        botName: bot.name,
-                        symbol: pos.symbol,
-                        side: pos.side,
-                        pnlUsdt: finalPnlUsdt,
-                        pnlPct: finalPnlPct,
-                        currentPrice,
-                        exitReason,
-                        newBalance,
-                      },
-                    })
-                  );
-                }
-
-                if (onNotifyRef.current) {
-                  onNotifyRef.current(
-                    `Profit Secured! +$${finalPnlUsdt.toFixed(2)} USDT (+${finalPnlPct.toFixed(1)}%) on ${pos.symbol} credited to account (Balance: $${newBalance.toLocaleString()}).`
-                  );
-                }
-              } else {
-                if (onNotifyRef.current) {
-                  onNotifyRef.current(
-                    `Cut Loss (-1.0%) on ${pos.symbol} (-$${Math.abs(finalPnlUsdt).toFixed(2)} USDT). Margin returned: $${returnedAmount.toFixed(2)} USDT (Balance: $${newBalance.toLocaleString()}).`
-                  );
-                }
-              }
-
-              const closedRecord: CopyTradeRecord = {
-                id: `trade-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                botId: bot.id,
-                botName: bot.name,
-                symbol: pos.symbol,
-                side: pos.side,
-                entryPrice: pos.entryPrice,
-                exitPrice: currentPrice,
-                sizeUsdt: pos.sizeUsdt,
-                leverage: pos.leverage,
-                pnlUsdt: finalPnlUsdt,
-                pnlPct: finalPnlPct,
-                exitReason,
-                openedAt: pos.openedAt,
-                closedAt: Date.now(),
-                durationSeconds: Math.floor((Date.now() - pos.openedAt) / 1000),
-              };
-              updatedTrades = [closedRecord, ...updatedTrades].slice(0, 50);
-
-              // Sync to global trade history
-              addGlobalTradeRecord({
-                id: closedRecord.id,
-                timestamp: closedRecord.closedAt,
-                source: bot.name,
-                symbol: pos.symbol,
-                side: pos.side,
-                entryPrice: pos.entryPrice,
-                exitPrice: currentPrice,
-                sizeUsdt: pos.sizeUsdt,
-                leverage: pos.leverage,
-                pnlUsdt: finalPnlUsdt,
-                pnlPct: finalPnlPct,
-                exitReason,
-                status: "CLOSED",
-              });
-            } else {
-              // Update floating values
-              remainingPositions.push({
-                ...pos,
-                currentPrice,
-                pnlUsdt: Math.round(pnlUsdt * 100) / 100,
-                pnlPct: Math.round(pnlPct * 10) / 10,
-              });
-            }
-          }
-
-          // 3. Automated Signal-Fed Internal Trade Placement:
-          // Immediately opens next position when capacity is available (checks every 4s)
-          if (
-            remainingPositions.length < bot.basket.length &&
-            nextElapsed % 4 === 0
-          ) {
-            // Pick a candidate coin from the basket not currently open
-            const openSymbols = new Set(remainingPositions.map((p) => p.symbol));
-            const availableInBasket = bot.basket.filter((b) => !openSymbols.has(b.symbol));
-
-            if (availableInBasket.length > 0) {
-              const targetItem = availableInBasket[0];
-              const coinPrice = priceMap[targetItem.symbol] || 100;
-
-              if (coinPrice > 0) {
-                // Determine side based on coin price momentum or default LONG
-                const isLong = Math.random() > 0.35; // 65% long bias in trend
-                const side = isLong ? "LONG" : "SHORT";
-                // Margin calculated from weight
-                const posMargin = Math.max(
-                  15,
-                  Math.round((bot.allocatedCapital * (targetItem.weightPct / 100)) / 2)
-                );
-                const leverage = bot.selectedLeverage || bot.defaultLeverage;
-
-                // 1. User rule: "کپی تریدرها وقتی دارن ترید میکنن با موجودی بالانس یوزرهم باید حواسشون به مبلغ لیکویدی باشه اگر نمیخورد باز نکنه پوزیشن و اخطالر بده"
-                // Check available user balance:
-                const currentWallet = loadStoredWallet();
-                if (currentWallet.balanceUsdt < posMargin) {
-                  if (onNotifyRef.current) {
-                    onNotifyRef.current(
-                      `INSUFFICIENT BALANCE WARNING: Required margin $${posMargin} USDT exceeds wallet balance ($${currentWallet.balanceUsdt.toFixed(2)} USDT). Position skipped.`
-                    );
-                  }
-                  return bot;
-                }
-
-                // Check liquidation maintenance buffer:
-                const maintenanceMarginBuffer = posMargin * 0.08;
-                if (currentWallet.balanceUsdt < posMargin + maintenanceMarginBuffer) {
-                  if (onNotifyRef.current) {
-                    onNotifyRef.current(
-                      `LIQUIDATION BUFFER WARNING: Available balance cannot safely cover liquidation buffer for ${targetItem.symbol} at ${leverage}x leverage. Position skipped.`
-                    );
-                  }
-                  return bot;
-                }
-
-                // 2. User rule: "و هم اینکه لایو اکانت بالانس عددش تغییر کنه که یوزر متوجه بشع داره معامله میکنه"
-                // Deduct position margin from wallet balance live!
-                const debitResult = debitWalletBalance(posMargin);
-                if (!debitResult.success) {
-                  return bot;
-                }
-
-                const notional = posMargin * leverage;
-                const quantity = notional / coinPrice;
-
-                // Estimated Liquidation Price
-                const liqPrice = isLong
-                  ? coinPrice * (1 - 1 / leverage + 0.005)
-                  : coinPrice * (1 + 1 / leverage - 0.005);
-
-                // TATS PRO inspired levels: 1.5% - 2.5% SL, 2% - 8% TP
-                const riskDist = coinPrice * 0.018;
-                const stopLoss = isLong ? coinPrice - riskDist : coinPrice + riskDist;
-                const takeProfit = isLong ? coinPrice + riskDist * 2.5 : coinPrice - riskDist * 2.5;
-
-                const tpLevels = [1, 2, 3, 4, 5, 6, 7].map((m) =>
-                  isLong ? coinPrice + riskDist * m : coinPrice - riskDist * m
-                );
-
-                const newPosition: CopyTradePosition = {
-                  id: `pos-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                  botId: bot.id,
-                  symbol: targetItem.symbol,
-                  side,
-                  entryPrice: coinPrice,
-                  currentPrice: coinPrice,
-                  sizeUsdt: posMargin,
-                  leverage,
-                  notionalUsdt: notional,
-                  quantity: Number(quantity.toFixed(4)),
-                  stopLoss: Number(stopLoss.toFixed(4)),
-                  takeProfit: Number(takeProfit.toFixed(4)),
-                  tpLevels: tpLevels.map((t) => Number(t.toFixed(4))),
-                  highestTpReached: 0,
-                  pnlUsdt: 0,
-                  pnlPct: 0,
-                  openedAt: Date.now(),
-                  timeframe: bot.preferredTimeframe,
-                  signalReason: `TATS PRO 6-EMA ${side} Signal Confirmed`,
-                  liquidationPrice: Number(liqPrice.toFixed(coinPrice < 10 ? 4 : 2)),
-                };
-
-                remainingPositions.push(newPosition);
-
-                if (onNotifyRef.current) {
-                  onNotifyRef.current(
-                    `Bot ${bot.name} opened ${side} on ${targetItem.symbol} ($${posMargin} margin deducted | Balance: $${debitResult.newWallet.balanceUsdt.toLocaleString()}).`
-                  );
-                }
-              }
-            }
-          }
-
-          // Calculate current unrealized PnL
-          const totalUnrealized = remainingPositions.reduce((sum, p) => sum + p.pnlUsdt, 0);
-
-          return {
-            ...bot,
-            elapsedSeconds: nextElapsed,
-            realizedPnlUsdt: Math.round((bot.realizedPnlUsdt + realizedPnlDelta) * 100) / 100,
-            unrealizedPnlUsdt: Math.round(totalUnrealized * 100) / 100,
-            totalTradesCount: bot.totalTradesCount + newWins + newLosses,
-            winningTradesCount: bot.winningTradesCount + newWins,
-            losingTradesCount: bot.losingTradesCount + newLosses,
-            openPositions: remainingPositions,
-            recentTrades: updatedTrades,
-          };
-        });
-
-        return hasChanges ? updated : prevBots;
-      });
-    }, 1000);
-
-    return () => window.clearInterval(interval);
-  }, [priceMap]);
-
-  // Start / Stop Bot Handler
+  // Start / Stop Bot Handler (display-only; never moves funds)
   const handleToggleBot = (botId: string) => {
     setLastActiveBotId(botId);
     setBots((prev) =>
       prev.map((b) => {
         if (b.id !== botId) return b;
         if (b.status === "RUNNING") {
-          const marginToRelease = b.openPositions.reduce((sum, p) => sum + p.sizeUsdt, 0);
-          if (marginToRelease > 0) {
-            creditWalletBalance(marginToRelease);
-          }
-          onNotify(`Bot "${b.name}" stopped. Open margins released to wallet balance.`);
+          onNotify(`Bot "${b.name}" stopped (display only — no funds moved).`);
           return { ...b, status: "IDLE", openPositions: [] };
         } else {
-          onNotify(`Bot "${b.name}" started. Internal signal trading and runtime counter active.`);
+          onNotify(
+            `Bot "${b.name}" marked running (display only). Live copy trading is disabled in this build.`
+          );
           return {
             ...b,
             status: "RUNNING",
@@ -458,7 +179,7 @@ export function CopyTradingPage({
     );
   };
 
-  // Manually close an open position
+  // Manually close an open position (display-only; no funds move)
   const handleClosePosition = (botId: string, posId: string) => {
     setBots((prev) =>
       prev.map((b) => {
@@ -466,79 +187,13 @@ export function CopyTradingPage({
         const targetPos = b.openPositions.find((p) => p.id === posId);
         if (!targetPos) return b;
 
-        const isWin = targetPos.pnlUsdt > 0;
-        const returnAmount = Math.max(0, Math.round((targetPos.sizeUsdt + targetPos.pnlUsdt) * 100) / 100);
-        const updatedWallet = creditWalletBalance(returnAmount);
-        const newBalance = updatedWallet.balanceUsdt;
-
-        if (isWin) {
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(
-              new CustomEvent("tradenews_profit_secured", {
-                detail: {
-                  botName: b.name,
-                  symbol: targetPos.symbol,
-                  side: targetPos.side,
-                  pnlUsdt: targetPos.pnlUsdt,
-                  pnlPct: targetPos.pnlPct,
-                  currentPrice: targetPos.currentPrice,
-                  exitReason: "Save Profit Action",
-                  newBalance,
-                },
-              })
-            );
-          }
-        }
-
-        const record: CopyTradeRecord = {
-          id: `trade-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          botId: b.id,
-          botName: b.name,
-          symbol: targetPos.symbol,
-          side: targetPos.side,
-          entryPrice: targetPos.entryPrice,
-          exitPrice: targetPos.currentPrice,
-          sizeUsdt: targetPos.sizeUsdt,
-          leverage: targetPos.leverage,
-          pnlUsdt: targetPos.pnlUsdt,
-          pnlPct: targetPos.pnlPct,
-          exitReason: isWin ? "Save Profit Action" : "Manual Close",
-          openedAt: targetPos.openedAt,
-          closedAt: Date.now(),
-          durationSeconds: Math.floor((Date.now() - targetPos.openedAt) / 1000),
-        };
-
-        onNotify(
-          isWin
-            ? `Profit Secured! +$${targetPos.pnlUsdt.toFixed(2)} USDT credited to your wallet balance.`
-            : `Closed ${targetPos.symbol} position.`
-        );
-
-        // Record to global trade history
-        addGlobalTradeRecord({
-          id: record.id,
-          timestamp: record.closedAt,
-          source: b.name,
-          symbol: targetPos.symbol,
-          side: targetPos.side,
-          entryPrice: targetPos.entryPrice,
-          exitPrice: targetPos.currentPrice,
-          sizeUsdt: targetPos.sizeUsdt,
-          leverage: targetPos.leverage,
-          pnlUsdt: targetPos.pnlUsdt,
-          pnlPct: targetPos.pnlPct,
-          exitReason: "Manual Immediate Close",
-          status: "CLOSED",
-        });
+        void _addGlobalTradeRecord_Unused;
+        void _loadStoredWallet_Unused;
+        onNotify(`Closed ${targetPos.symbol} display position. No funds moved.`);
 
         return {
           ...b,
-          realizedPnlUsdt: Math.round((b.realizedPnlUsdt + targetPos.pnlUsdt) * 100) / 100,
-          totalTradesCount: b.totalTradesCount + 1,
-          winningTradesCount: b.winningTradesCount + (isWin ? 1 : 0),
-          losingTradesCount: b.losingTradesCount + (isWin ? 0 : 1),
           openPositions: b.openPositions.filter((p) => p.id !== posId),
-          recentTrades: [record, ...b.recentTrades],
         };
       })
     );

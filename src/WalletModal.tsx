@@ -14,6 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import { WalletState, DEPOSIT_NETWORKS, DepositNetwork } from "./walletState.ts";
+import { FINANCIAL_OPERATIONS_ENABLED } from "./tradenews/config.ts";
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -108,16 +109,19 @@ export function WalletModal({
   };
 
   const handleConnect = (walletName: WalletState["walletName"]) => {
+    // Record-only local reference. No fabricated address or balance.
+    // Real wallet verification/linking happens against the TradeNews backend.
     const updated: WalletState = {
       isConnected: true,
-      address: `0x${Math.random().toString(16).slice(2, 10)}...${Math.random().toString(16).slice(2, 6)}`,
+      address: null,
       walletName,
       network: "Arbitrum One",
-      balanceUsdt: 18450.0,
+      balanceUsdt: 0,
     };
     onUpdateWallet(updated);
-    onNotify(`Connected to ${walletName} successfully.`);
-    onClose();
+    onNotify(
+      `Wallet provider "${walletName}" recorded locally. Link and verify it against the TradeNews backend before balances can be shown.`
+    );
   };
 
   const handleDisconnect = () => {
@@ -135,26 +139,12 @@ export function WalletModal({
 
   const handleConfirmWithdraw = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!withdrawAddress.trim()) {
-      onNotify("Please enter a destination withdrawal address.");
-      return;
-    }
-    if (withdrawAmount <= 0 || withdrawAmount > wallet.balanceUsdt) {
-      onNotify("Invalid withdrawal amount or insufficient balance.");
-      return;
-    }
-
-    setIsSubmittingWithdraw(true);
-    setTimeout(() => {
-      const newBal = Math.max(0, wallet.balanceUsdt - withdrawAmount);
-      onUpdateWallet({
-        ...wallet,
-        balanceUsdt: newBal,
-      });
-      setIsSubmittingWithdraw(false);
-      onNotify(`Withdrawal request of $${withdrawAmount.toLocaleString()} USDT submitted to ${withdrawNetwork}.`);
-      onClose();
-    }, 1200);
+    // FINANCIAL SAFETY: real-money withdrawals are disabled in this build.
+    onNotify(
+      FINANCIAL_OPERATIONS_ENABLED
+        ? "Withdrawals are handled by the TradeNews backend. This build does not submit withdrawal transactions."
+        : "Withdrawals are disabled (FINANCIAL_OPERATIONS_ENABLED=false). No funds moved."
+    );
   };
 
   return (
@@ -236,7 +226,7 @@ export function WalletModal({
 
                   <div className="flex items-center justify-between text-xs border-t border-slate-800/60 pt-2 font-mono">
                     <span className="text-slate-400 font-sans">Address</span>
-                    <span className="text-emerald-300 font-bold">{wallet.address}</span>
+                    <span className="text-emerald-300 font-bold">{wallet.address || "Not verified — link via backend"}</span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs border-t border-slate-800/60 pt-2 font-mono">
@@ -244,6 +234,9 @@ export function WalletModal({
                     <span className="text-base text-white font-extrabold">
                       ${wallet.balanceUsdt.toLocaleString()} USDT
                     </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 leading-relaxed">
+                    Balances are shown only from the TradeNews backend. This panel never invents funds.
                   </div>
 
                   <button

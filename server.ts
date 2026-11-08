@@ -8,9 +8,15 @@ import { EventEmitter } from "events";
 import axios from "axios";
 import cors from "cors";
 import crypto from "crypto";
-import { GoogleGenAI } from "@google/genai";
 import { db } from "./db.ts";
 import { hyperliquidService } from "./hyperliquidService.ts";
+
+// NOTE: server.ts is a LEGACY local dev simulator only. It is NOT part of the
+// Cloudflare production path (static dist/ + api.tradenews.live Worker + D1).
+// Google Gemini / GenAI has been removed from this project. The /api/ai/*
+// route below now returns the deterministic local-technical fallback only.
+const ai: null = null;
+void ai;
 
 // Prevent MaxListenersExceededWarning when making concurrent or frequent HTTPS calls
 EventEmitter.defaultMaxListeners = 50;
@@ -34,15 +40,6 @@ const httpClient = axios.create({
   httpAgent,
   httpsAgent,
   timeout: 5000,
-});
-
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    }
-  }
 });
 
 export interface CryptoMeta {
@@ -689,7 +686,9 @@ async function startServer() {
     }
   });
 
-  // AI Market Calculator & Signal Endpoint (Gemini 3.8 Flash)
+  // AI Market Calculator & Signal Endpoint (legacy local-only fallback).
+  // Gemini removed: no Google dependency. Returns deterministic
+  // local-technical baseline so legacy dev UI keeps working.
   app.post("/api/ai/analyze-chart", async (req, res) => {
     const { symbol, currentPrice, interval, technicals } = req.body;
     const coinSymbol = symbol || "SOL/USD";
@@ -718,60 +717,11 @@ async function startServer() {
       resistanceLevel: Number((price * 1.015).toFixed(2)),
     };
 
-    if (!process.env.GEMINI_API_KEY) {
-      return res.json(fallbackResponse);
-    }
-
-    try {
-      const prompt = `You are a professional crypto quant trading AI algorithm.
-Analyze this live chart data for ${coinSymbol} on the ${interval || "1m"} timeframe:
-- Current Market Price: $${price} USD
-- RSI (14): ${rsi}
-- Moving Average Trend: ${trend}
-- Algorithmic Score (-10 to +10): ${score}
-- EMA 9: ${technicals?.ema9} | EMA 21: ${technicals?.ema21}
-- Bollinger Band Lower: ${technicals?.bollinger?.lower} | Upper: ${technicals?.bollinger?.upper}
-
-The trader requires a 1-MINUTE PERSISTENT PREDICTIVE SIGNAL that forecasts whether price will remain in BUY (UP) or SELL (DOWN) for the next 60 seconds.
-
-Return ONLY a strict JSON object with:
-{
-  "signal": "BUY" | "SELL" | "NEUTRAL",
-  "direction": "UP" | "DOWN" | "NEUTRAL",
-  "confidence": <integer between 84 and 96>,
-  "analysisEn": "<2 concise sentences in English explaining why the signal will persist in BUY or SELL for the next 60 seconds>",
-  "recommendedDuration": "15s" | "30s" | "60s",
-  "supportLevel": <number>,
-  "resistanceLevel": <number>
-}`;
-
-      const aiResponse = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.3,
-        },
-      });
-
-      const text = aiResponse.text;
-      if (text) {
-        const parsed = JSON.parse(text);
-        return res.json({
-          signal: parsed.signal || fallbackResponse.signal,
-          direction: parsed.direction || fallbackResponse.direction,
-          confidence: parsed.confidence || fallbackResponse.confidence,
-          analysisEn: parsed.analysisEn || fallbackResponse.analysisEn,
-          recommendedDuration: parsed.recommendedDuration || fallbackResponse.recommendedDuration,
-          supportLevel: parsed.supportLevel || fallbackResponse.supportLevel,
-          resistanceLevel: parsed.resistanceLevel || fallbackResponse.resistanceLevel,
-        });
-      }
-      res.json(fallbackResponse);
-    } catch (err: any) {
-      console.error("Gemini AI chart analysis error:", err?.message);
-      res.json(fallbackResponse);
-    }
+    // Legacy local fallback: deterministic, no external AI call.
+    void rsi;
+    void trend;
+    void interval;
+    return res.json(fallbackResponse);
   });
 
   // User Accounts
